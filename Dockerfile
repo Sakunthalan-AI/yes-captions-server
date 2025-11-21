@@ -19,11 +19,16 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# --- CHANGE 1: Install ALL dependencies (including dev dependencies like TypeScript) ---
+# We changed 'npm ci --only=production' to 'npm install' so we have access to 'tsc'
+RUN npm install
 
 # Copy server files
 COPY . .
+
+# --- CHANGE 2: Build the TypeScript code ---
+# This creates the JavaScript files (usually in a 'dist' or 'build' folder)
+RUN npm run build
 
 # Create temp directory for video processing
 RUN mkdir -p /tmp
@@ -35,6 +40,8 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3001/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
 
-# Start server
-CMD ["node", "index.js"]
-
+# --- CHANGE 3: Start the COMPILED JavaScript file ---
+# Node runs the JS file created by step 2.
+# IMPORTANT: Check your tsconfig.json to see if output is "dist" or "build".
+# I am assuming "dist" here:
+CMD ["node", "dist/index.js"]
