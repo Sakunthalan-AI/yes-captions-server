@@ -44,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Node runs the JS file created by step 2.
 # IMPORTANT: Check your tsconfig.json to see if output is "dist" or "build".
 # I am assuming "dist" here:
-CMD ["node", "dist/index.js"]
+CMD ["npm", "start"]
