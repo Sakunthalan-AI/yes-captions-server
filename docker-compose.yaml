@@ -1,0 +1,46 @@
+version: '1.0'
+
+services:
+  captions-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: captions-export-server
+    ports:
+      - "3001:3001"
+    environment:
+      - EXPORT_WORKER_PORT=3001
+      - EXPORT_WORKER_HOST=0.0.0.0
+      - NODE_ENV=production
+      # CLIENT_URL is required for CORS when client domain is different from server
+      # Set this in .env file or override when running: CLIENT_URL=https://your-frontend.com docker-compose up
+      # - CLIENT_URL=https://www.yescaptions.com
+      - EXPORT_WORKER_AUTO_START=true
+    volumes:
+      - caption-temp:/tmp/caption-export
+    networks:
+      - captions-network
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+    restart: unless-stopped
+
+volumes:
+  caption-temp:
+    driver: local
+
+networks:
+  captions-network:
+    driver: bridge
+
