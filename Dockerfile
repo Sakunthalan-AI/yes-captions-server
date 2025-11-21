@@ -1,7 +1,7 @@
 # Use Node.js LTS version
 FROM node:18-slim
 
-# Install FFmpeg and dependencies required for canvas
+# Install FFmpeg, canvas dependencies, and Puppeteer/Chrome dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libcairo2-dev \
@@ -11,6 +11,19 @@ RUN apt-get update && apt-get install -y \
     librsvg2-dev \
     build-essential \
     python3 \
+    # Puppeteer/Chrome dependencies
+    libnss3 \
+    libatk-bridge2.0-0 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libatspi2.0-0 \
+    libxshmfence1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
