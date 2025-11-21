@@ -24,6 +24,14 @@ RUN apt-get update && apt-get install -y \
     libasound2 \
     libatspi2.0-0 \
     libxshmfence1 \
+    libcups2 \
+    libx11-xcb1 \
+    libxcursor1 \
+    libxi6 \
+    libxtst6 \
+    libatk1.0-0 \
+    libpangocairo-1.0-0 \
+    libgtk-3-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
