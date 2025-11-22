@@ -4,14 +4,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { writeFile } from "node:fs/promises";
 
-// Extend Window interface for browser context
-declare global {
-  interface Window {
-    captionRendererReady: boolean;
-    updateCaptions: () => void;
-  }
-}
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 

@@ -1,13 +1,15 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 const execAsync = promisify(exec);
+const ffmpegPath = ffmpegInstaller.path;
 /**
  * Compose final video by overlaying captions onto video frames using FFmpeg
  * This is the final step in the optimized pipeline
  */
 export async function composeFinalVideo(options) {
-    const { videoFramesDir, overlayFramesDir, audioPath, outputPath, fps, totalFrames } = options;
+    const { videoFramesDir, overlayFramesDir, audioPath, outputPath, fps, totalFrames, onProgress } = options;
     console.log("Starting optimized FFmpeg video composition...");
     console.log(`- Video frames: ${videoFramesDir}`);
     console.log(`- Overlay frames: ${overlayFramesDir}`);
@@ -17,7 +19,7 @@ export async function composeFinalVideo(options) {
     // FFmpeg filter_complex to overlay captions onto video frames
     // We use two image sequences as inputs and overlay them
     const ffmpegCommand = [
-        "ffmpeg",
+        `"${ffmpegPath}"`,
         "-framerate", String(fps),
         "-start_number", "1",
         "-i", `"${path.join(videoFramesDir, "video-frame-%06d.jpg")}"`, // Video frames
@@ -43,6 +45,7 @@ export async function composeFinalVideo(options) {
     // Execute FFmpeg with progress tracking
     const ffmpegProcess = exec(ffmpegCommand, { maxBuffer: 50 * 1024 * 1024 });
     let lastProgress = 0;
+    let lastReportedProgress = 0;
     ffmpegProcess.stderr?.on("data", (data) => {
         const output = data.toString();
         // Parse FFmpeg progress (frame=XXX)
@@ -50,15 +53,25 @@ export async function composeFinalVideo(options) {
         if (frameMatch) {
             const currentFrame = parseInt(frameMatch[1]);
             const progress = Math.floor((currentFrame / totalFrames) * 100);
+            const normalizedProgress = Math.min(currentFrame / totalFrames, 1);
             if (progress > lastProgress && progress % 5 === 0) {
                 console.log(`FFmpeg composition progress: ${progress}%`);
                 lastProgress = progress;
+            }
+            // Call progress callback every 5% or on completion
+            if (onProgress && (progress >= lastReportedProgress + 5 || normalizedProgress >= 1)) {
+                onProgress(normalizedProgress);
+                lastReportedProgress = progress;
             }
         }
     });
     await new Promise((resolve, reject) => {
         ffmpegProcess.on("close", (code) => {
             if (code === 0) {
+                // Ensure we report 100% completion
+                if (onProgress) {
+                    onProgress(1);
+                }
                 resolve(undefined);
             }
             else {

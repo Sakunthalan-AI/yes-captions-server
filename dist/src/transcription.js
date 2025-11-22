@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import ffmpeg from "fluent-ffmpeg";
 import FormData from "form-data";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+// Ensure fluent-ffmpeg uses the cross-platform binaries from npm on all OSes
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+ffmpeg.setFfprobePath(ffprobeInstaller.path);
 // Helper functions from legacy code
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const roundTo = (value, precision = 2) => {
@@ -177,7 +182,7 @@ const normalizeSegments = (segments, totalDuration) => {
         };
     });
 };
-export async function transcribeVideo(videoPath, tempDir) {
+export async function transcribeVideo(videoPath, tempDir, language = 'en') {
     let audioPath = null;
     try {
         // Check video duration
@@ -229,7 +234,7 @@ export async function transcribeVideo(videoPath, tempDir) {
         groqFormData.append("model", "whisper-large-v3-turbo");
         groqFormData.append("temperature", "0");
         groqFormData.append("response_format", "verbose_json");
-        groqFormData.append("language", "en");
+        groqFormData.append("language", language);
         groqFormData.append("timestamp_granularities[]", "word");
         const groqApiKey = "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";
         if (!groqApiKey) {
