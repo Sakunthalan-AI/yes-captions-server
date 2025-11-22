@@ -83,8 +83,11 @@ Create a `.env` file (optional but recommended) or set env vars in your process 
 
 ```bash
 cat > .env << 'EOF'
-EXPORT_SERVER_PORT=3001
-CLIENT_URL=https://your-frontend-domain.com
+GROQ_API_KEY=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
+EXPORT_WORKER_PORT=3001
+EXPORT_WORKER_HOST=0.0.0.0
+NODE_ENV=production
+EXPORT_WORKER_AUTO_START=true
 EOF
 ```
 
