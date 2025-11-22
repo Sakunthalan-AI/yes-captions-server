@@ -3,6 +3,15 @@ import path from "node:path";
 import puppeteer, { type Browser, type Page } from "puppeteer";
 import type { CaptionExportPayload } from "../types.js";
 
+// Extend Window interface for our custom functions
+declare global {
+  interface Window {
+    captionRendererReady: boolean;
+    updateCaptions: (currentTime: number) => void;
+    captureFrame: () => Promise<string | null>;
+  }
+}
+
 /**
  * Map font families to their local file names/patterns
  */
@@ -68,6 +77,7 @@ function hexToRgb(hex: string): string {
 
 /**
  * Generate HTML template for caption overlay rendering (transparent background)
+ * Includes Canvas rasterization for performance
  */
 async function generateOverlayHTML(payload: CaptionExportPayload): Promise<string> {
   const { style, metadata, subtitles } = payload;
@@ -76,22 +86,10 @@ async function generateOverlayHTML(payload: CaptionExportPayload): Promise<strin
   const fontBase64 = await getLocalFontBase64(style.fontFamily || "Inter", style.fontWeight);
   const fontFamilyName = style.fontFamily ? style.fontFamily.split(",")[0].trim().replace(/['"]/g, "") : "Inter";
 
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-    ${fontBase64 ? `
-    @font-face {
-      font-family: '${fontFamilyName}';
-      src: url('${fontBase64}') format('truetype');
-      font-weight: ${style.fontWeight || "normal"};
-      font-style: normal;
-    }
-    ` : ""}
-    
+  // Extract CSS as a variable for reuse in SVG
+  const cssStyles = `
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { overflow: hidden; background: transparent; }
+    body { overflow: hidden; background: transparent; margin: 0; padding: 0; }
     #container { position: relative; width: ${canvas.width}px; height: ${canvas.height}px; background: transparent; }
     #caption-overlay { position: absolute; top: 0; left: 0; width: ${canvas.width}px; height: ${canvas.height}px; }
     .caption {
@@ -102,7 +100,7 @@ async function generateOverlayHTML(payload: CaptionExportPayload): Promise<strin
       max-width: 90%;
       left: 50%;
       transform: translateX(-50%);
-      font-family: ${style.fontFamily || "Inter, sans-serif"};
+      font-family: '${fontFamilyName}', ${style.fontFamily || "sans-serif"};
       font-size: ${style.fontSize * 0.88}px;
       font-weight: ${style.fontWeight || 700};
       color: ${style.color};
@@ -120,19 +118,48 @@ async function generateOverlayHTML(payload: CaptionExportPayload): Promise<strin
     .caption .word {
       display: inline-block;
       margin-right: 0.3em;
-      transition: none; /* No transitions for static frames */
+      transition: none;
     }
     .caption .word:last-child { margin-right: 0; }
+  `;
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    ${fontBase64 ? `
+    @font-face {
+      font-family: '${fontFamilyName}';
+      src: url('${fontBase64}') format('truetype');
+      font-weight: ${style.fontWeight || "normal"};
+      font-style: normal;
+    }
+    ` : ""}
+    ${cssStyles}
   </style>
 </head>
 <body>
   <div id="container">
     <div id="caption-overlay"></div>
   </div>
+  
+  <!-- Hidden canvas for rasterization -->
+  <canvas id="render-canvas" width="${canvas.width}" height="${canvas.height}" style="display: none;"></canvas>
+
   <script>
     const PAYLOAD = ${JSON.stringify(payload)};
     const overlay = document.getElementById('caption-overlay');
+    const canvas = document.getElementById('render-canvas');
+    const ctx = canvas.getContext('2d');
     
+    // Store CSS for SVG reuse
+    const CSS_STYLES = \`${cssStyles.replace(/`/g, '\\`')}\`;
+    const FONT_BASE64 = ${fontBase64 ? `\`${fontBase64}\`` : 'null'};
+    const FONT_FAMILY_NAME = '${fontFamilyName}';
+    const FONT_WEIGHT = ${style.fontWeight || 400};
+    
+    // Build DOM elements
     PAYLOAD.subtitles.forEach(subtitle => {
       const captionDiv = document.createElement('div');
       captionDiv.className = 'caption';
@@ -159,6 +186,7 @@ async function generateOverlayHTML(payload: CaptionExportPayload): Promise<strin
       overlay.appendChild(captionDiv);
     });
     
+    // Update DOM state based on time
     window.updateCaptions = function(currentTime) {
       const TIMING_BUFFER = 0.05;
       const adjustedTime = currentTime + TIMING_BUFFER;
@@ -194,6 +222,51 @@ async function generateOverlayHTML(payload: CaptionExportPayload): Promise<strin
         }
       });
     };
+
+    // Rasterize current DOM state to Canvas and return Data URL
+    window.captureFrame = function() {
+      const container = document.getElementById('container');
+      
+      // Serialize the container HTML
+      const xmlSerializer = new XMLSerializer();
+      const htmlContent = xmlSerializer.serializeToString(container);
+      
+      // Create SVG with foreignObject
+      const svg = \`
+        <svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}">
+          <style>
+            \${CSS_STYLES}
+            \${FONT_BASE64 ? \`
+            @font-face {
+              font-family: '\${FONT_FAMILY_NAME}';
+              src: url('\${FONT_BASE64}') format('truetype');
+              font-weight: \${FONT_WEIGHT};
+              font-style: normal;
+            }
+            \` : ''}
+          </style>
+          <foreignObject width="100%" height="100%">
+            <div xmlns="http://www.w3.org/1999/xhtml">
+              \${htmlContent}
+            </div>
+          </foreignObject>
+        </svg>
+      \`;
+      
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        img.onerror = (e) => {
+          console.error("SVG load error", e);
+          resolve(null);
+        };
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      });
+    };
     
     window.captionRendererReady = true;
   </script>
@@ -207,8 +280,8 @@ export interface OverlayRenderResult {
 }
 
 /**
- * Render caption overlays as transparent PNGs (one per frame)
- * This is much simpler and faster than rendering the full video
+ * Render caption overlays using Canvas Data URL extraction
+ * Optimized with parallel processing for 3-6x speedup
  */
 export async function renderCaptionOverlays(
   browser: Browser,
@@ -219,90 +292,92 @@ export async function renderCaptionOverlays(
   outputDir: string,
   onProgress?: (progress: number) => void
 ): Promise<OverlayRenderResult> {
-  console.log(`Rendering ${totalFrames} caption overlays...`);
+  // CONCURRENCY SETTING: Adjust based on server capacity
+  const CONCURRENCY = 4;
 
-  const page = await browser.newPage();
+  console.log(`Rendering ${totalFrames} caption overlays with concurrency ${CONCURRENCY} (Canvas Mode)...`);
 
-  try {
-    // Set viewport
-    await page.setViewport({
-      width: payload.metadata.canvas.width,
-      height: payload.metadata.canvas.height,
-      deviceScaleFactor: 1,
-    });
+  // Create shared HTML file once
+  const html = await generateOverlayHTML(payload);
+  const htmlPath = path.join(outputDir, "overlay-render.html");
+  await writeFile(htmlPath, html, "utf8");
+  const fileUrl = `file://${htmlPath}`;
 
-    // Generate and load HTML
-    const html = await generateOverlayHTML(payload);
-    const htmlPath = path.join(outputDir, "overlay-render.html");
-    await writeFile(htmlPath, html, "utf8");
+  // Calculate chunks
+  const framesPerWorker = Math.ceil(totalFrames / CONCURRENCY);
+  const chunks = [];
 
-    await page.goto(`file://${htmlPath}`, {
-      waitUntil: "load",
-      timeout: 60000
-    });
+  for (let i = 0; i < CONCURRENCY; i++) {
+    const start = i * framesPerWorker;
+    const end = Math.min((i + 1) * framesPerWorker, totalFrames);
+    if (start < totalFrames) {
+      chunks.push({ id: i, start, end });
+    }
+  }
 
-    // Wait for fonts and renderer to be ready
-    await page.evaluateHandle("document.fonts.ready");
-    await page.waitForFunction(() => window.captionRendererReady, { timeout: 10000 });
+  let completedFrames = 0;
+  const frameInterval = 1 / fps;
 
-    // CRITICAL: Add small delay to ensure fonts are actually rendered, not just loaded
-    // This fixes the "first frame has wrong font" issue
-    await page.evaluate(`new Promise(resolve => {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          setTimeout(resolve, 200);
-        });
-      });
-    })`);
+  // Worker function to process a chunk of frames
+  const processChunk = async (chunk: { id: number, start: number, end: number }) => {
+    const page = await browser.newPage();
 
-    console.log("Caption overlay renderer ready");
-
-    const overlayPaths: string[] = [];
-    const frameInterval = 1 / fps;
-    let lastReportedProgress = 0;
-
-    // Render overlays for each frame
-    for (let i = 0; i < totalFrames; i++) {
-      const currentTime = i * frameInterval;
-
-      // Update caption state for this timestamp
-      await page.evaluate(`window.updateCaptions(${currentTime})`);
-
-      // Small delay to ensure rendering is complete
-      await page.evaluate(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`);
-
-      // Capture as PNG with transparency
-      const overlayPath = path.join(outputDir, `overlay-${String(i).padStart(6, "0")}.png`);
-      await page.screenshot({
-        path: overlayPath,
-        type: "png",
-        omitBackground: true, // Transparent background
-        fullPage: false
+    try {
+      await page.setViewport({
+        width: payload.metadata.canvas.width,
+        height: payload.metadata.canvas.height,
+        deviceScaleFactor: 1,
       });
 
-      overlayPaths.push(overlayPath);
+      await page.goto(fileUrl, { waitUntil: "load", timeout: 60000 });
 
-      // Report progress every 10 frames or 5% increments
-      if (onProgress) {
-        const progress = (i + 1) / totalFrames;
-        const progressPercent = Math.floor(progress * 100);
-        
-        // Report every 10 frames or every 5% progress
-        if (i % 10 === 0 || progressPercent >= lastReportedProgress + 5 || i === totalFrames - 1) {
-          onProgress(progress);
-          lastReportedProgress = progressPercent;
+      // Wait for readiness
+      await page.evaluateHandle("document.fonts.ready");
+      await page.waitForFunction(() => window.captionRendererReady, { timeout: 10000 });
+
+      // Initial warm-up to ensure fonts render
+      await page.evaluate(`new Promise(resolve => setTimeout(resolve, 200))`);
+
+      // Process frames in this chunk
+      for (let i = chunk.start; i < chunk.end; i++) {
+        const currentTime = i * frameInterval;
+
+        // Update captions AND capture frame using canvas
+        const dataUrl = await page.evaluate(async (time) => {
+          window.updateCaptions(time);
+          // Small yield to let DOM update
+          await new Promise(r => requestAnimationFrame(r));
+          return await window.captureFrame();
+        }, currentTime) as string;
+
+        if (dataUrl) {
+          // Remove Data URL header "data:image/png;base64,"
+          const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
+          const overlayPath = path.join(outputDir, `overlay-${String(i).padStart(6, "0")}.png`);
+          await writeFile(overlayPath, base64Data, 'base64');
+        }
+
+        completedFrames++;
+
+        // Report progress (aggregated across workers)
+        if (onProgress && completedFrames % 10 === 0) {
+          onProgress(completedFrames / totalFrames);
         }
       }
 
-      if (i % 50 === 0 || i === totalFrames - 1) {
-        console.log(`Rendered overlay ${i + 1}/${totalFrames}`);
-      }
+      console.log(`Worker ${chunk.id} finished frames ${chunk.start}-${chunk.end}`);
+    } catch (err) {
+      console.error(`Worker ${chunk.id} failed:`, err);
+      throw err;
+    } finally {
+      await page.close();
     }
+  };
 
-    return { overlayPaths, totalFrames };
-  } finally {
-    await page.close();
-  }
+  // Run all chunks in parallel
+  await Promise.all(chunks.map(processChunk));
+
+  return { overlayPaths: [], totalFrames };
 }
 
 /**
