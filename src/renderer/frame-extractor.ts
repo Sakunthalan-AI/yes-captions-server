@@ -22,7 +22,8 @@ export interface FrameExtractionResult {
 export async function extractVideoFrames(
     videoPath: string,
     outputDir: string,
-    fps: number = 30
+    fps: number = 30,
+    onProgress?: (progress: number) => void
 ): Promise<FrameExtractionResult> {
     console.log(`Extracting frames from video at ${fps} FPS...`);
     console.log(`Video: ${videoPath}`);
@@ -52,9 +53,48 @@ export async function extractVideoFrames(
     console.log(`Running FFmpeg extraction: ${extractCommand}`);
 
     const startTime = Date.now();
-    await execAsync(extractCommand, { maxBuffer: 50 * 1024 * 1024 }); // 50MB buffer
-    const extractionTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    
+    // Use exec with streaming to track progress
+    if (onProgress) {
+        const ffmpegProcess = exec(extractCommand, { maxBuffer: 50 * 1024 * 1024 });
+        let lastProgress = 0;
 
+        ffmpegProcess.stderr?.on("data", (data: Buffer) => {
+            const output = data.toString();
+            
+            // Parse FFmpeg frame output (frame=XXX)
+            const frameMatch = output.match(/frame=\s*(\d+)/);
+            if (frameMatch) {
+                const currentFrame = parseInt(frameMatch[1]);
+                const progress = Math.min(currentFrame / totalFrames, 1);
+                
+                // Only report progress every 5% to avoid too many updates
+                const progressPercent = Math.floor(progress * 100);
+                if (progressPercent > lastProgress && progressPercent % 5 === 0) {
+                    onProgress(progress);
+                    lastProgress = progressPercent;
+                }
+            }
+        });
+
+        await new Promise<void>((resolve, reject) => {
+            ffmpegProcess.on("close", (code) => {
+                if (code === 0) {
+                    resolve();
+                } else {
+                    reject(new Error(`FFmpeg frame extraction exited with code ${code}`));
+                }
+            });
+            ffmpegProcess.on("error", reject);
+        });
+
+        // Ensure we report 100% completion
+        onProgress(1);
+    } else {
+        await execAsync(extractCommand, { maxBuffer: 50 * 1024 * 1024 });
+    }
+
+    const extractionTime = ((Date.now() - startTime) / 1000).toFixed(2);
     console.log(`Frame extraction complete in ${extractionTime}s`);
 
     // Generate frame paths

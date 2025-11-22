@@ -13,6 +13,7 @@ export interface CompositionOptions {
     outputPath: string;
     fps: number;
     totalFrames: number;
+    onProgress?: (progress: number) => void;
 }
 
 /**
@@ -20,7 +21,7 @@ export interface CompositionOptions {
  * This is the final step in the optimized pipeline
  */
 export async function composeFinalVideo(options: CompositionOptions): Promise<void> {
-    const { videoFramesDir, overlayFramesDir, audioPath, outputPath, fps, totalFrames } = options;
+    const { videoFramesDir, overlayFramesDir, audioPath, outputPath, fps, totalFrames, onProgress } = options;
 
     console.log("Starting optimized FFmpeg video composition...");
     console.log(`- Video frames: ${videoFramesDir}`);
@@ -62,6 +63,7 @@ export async function composeFinalVideo(options: CompositionOptions): Promise<vo
     const ffmpegProcess = exec(ffmpegCommand, { maxBuffer: 50 * 1024 * 1024 });
 
     let lastProgress = 0;
+    let lastReportedProgress = 0;
 
     ffmpegProcess.stderr?.on("data", (data: Buffer) => {
         const output = data.toString();
@@ -71,10 +73,17 @@ export async function composeFinalVideo(options: CompositionOptions): Promise<vo
         if (frameMatch) {
             const currentFrame = parseInt(frameMatch[1]);
             const progress = Math.floor((currentFrame / totalFrames) * 100);
+            const normalizedProgress = Math.min(currentFrame / totalFrames, 1);
 
             if (progress > lastProgress && progress % 5 === 0) {
                 console.log(`FFmpeg composition progress: ${progress}%`);
                 lastProgress = progress;
+            }
+
+            // Call progress callback every 5% or on completion
+            if (onProgress && (progress >= lastReportedProgress + 5 || normalizedProgress >= 1)) {
+                onProgress(normalizedProgress);
+                lastReportedProgress = progress;
             }
         }
     });
@@ -82,6 +91,10 @@ export async function composeFinalVideo(options: CompositionOptions): Promise<vo
     await new Promise((resolve, reject) => {
         ffmpegProcess.on("close", (code) => {
             if (code === 0) {
+                // Ensure we report 100% completion
+                if (onProgress) {
+                    onProgress(1);
+                }
                 resolve(undefined);
             } else {
                 reject(new Error(`FFmpeg exited with code ${code}`));
