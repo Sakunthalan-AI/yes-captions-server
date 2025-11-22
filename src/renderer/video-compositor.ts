@@ -1,8 +1,10 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
 const execAsync = promisify(exec);
+const ffmpegPath = ffmpegInstaller.path;
 
 export interface CompositionOptions {
     videoFramesDir: string; // Directory containing extracted video frames
@@ -30,7 +32,7 @@ export async function composeFinalVideo(options: CompositionOptions): Promise<vo
     // FFmpeg filter_complex to overlay captions onto video frames
     // We use two image sequences as inputs and overlay them
     const ffmpegCommand = [
-        "ffmpeg",
+        `"${ffmpegPath}"`,
         "-framerate", String(fps),
         "-start_number", "1",
         "-i", `"${path.join(videoFramesDir, "video-frame-%06d.jpg")}"`, // Video frames

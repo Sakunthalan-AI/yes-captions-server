@@ -1,8 +1,12 @@
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import path from "node:path";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
 
 const execAsync = promisify(exec);
+const ffmpegPath = ffmpegInstaller.path;
+const ffprobePath = ffprobeInstaller.path;
 
 export interface FrameExtractionResult {
     framePaths: string[];
@@ -25,7 +29,7 @@ export async function extractVideoFrames(
     console.log(`Output: ${outputDir}`);
 
     // First, get video metadata (duration)
-    const probeCommand = `ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`;
+    const probeCommand = `"${ffprobePath}" -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${videoPath}"`;
     const { stdout: durationOutput } = await execAsync(probeCommand);
     const duration = parseFloat(durationOutput.trim());
     const totalFrames = Math.ceil(duration * fps);
@@ -37,7 +41,7 @@ export async function extractVideoFrames(
     const outputPattern = path.join(outputDir, "video-frame-%06d.jpg");
 
     const extractCommand = [
-        "ffmpeg",
+        `"${ffmpegPath}"`,
         "-i", `"${videoPath}"`,
         "-vf", `fps=${fps}`, // Extract at specified FPS
         "-q:v", "2", // High quality JPEG (2 = best quality)

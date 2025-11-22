@@ -4,6 +4,12 @@ import ffmpeg from "fluent-ffmpeg";
 import { promisify } from "node:util";
 import type { TranscriptionResponse, Word } from "./types.js";
 import FormData from "form-data";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
+
+// Ensure fluent-ffmpeg uses the cross-platform binaries from npm on all OSes
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
+ffmpeg.setFfprobePath(ffprobeInstaller.path);
 
 // Helper functions from legacy code
 const clamp = (value: number, min: number, max: number) =>
