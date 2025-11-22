@@ -216,7 +216,8 @@ export async function renderCaptionOverlays(
   totalFrames: number,
   duration: number,
   fps: number,
-  outputDir: string
+  outputDir: string,
+  onProgress?: (progress: number) => void
 ): Promise<OverlayRenderResult> {
   console.log(`Rendering ${totalFrames} caption overlays...`);
 
@@ -258,6 +259,7 @@ export async function renderCaptionOverlays(
 
     const overlayPaths: string[] = [];
     const frameInterval = 1 / fps;
+    let lastReportedProgress = 0;
 
     // Render overlays for each frame
     for (let i = 0; i < totalFrames; i++) {
@@ -279,6 +281,18 @@ export async function renderCaptionOverlays(
       });
 
       overlayPaths.push(overlayPath);
+
+      // Report progress every 10 frames or 5% increments
+      if (onProgress) {
+        const progress = (i + 1) / totalFrames;
+        const progressPercent = Math.floor(progress * 100);
+        
+        // Report every 10 frames or every 5% progress
+        if (i % 10 === 0 || progressPercent >= lastReportedProgress + 5 || i === totalFrames - 1) {
+          onProgress(progress);
+          lastReportedProgress = progressPercent;
+        }
+      }
 
       if (i % 50 === 0 || i === totalFrames - 1) {
         console.log(`Rendered overlay ${i + 1}/${totalFrames}`);

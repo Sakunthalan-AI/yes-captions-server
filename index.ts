@@ -9,6 +9,7 @@ import type { CaptionExportPayload } from "./src/types.js";
 import { createBrowser, renderCaptionOverlays } from "./src/renderer/overlay-renderer.js";
 import { extractVideoFrames } from "./src/renderer/frame-extractor.js";
 import { composeFinalVideo } from "./src/renderer/video-compositor.js";
+import { setProgress, subscribe } from "./lib/progressStore.js";
 
 const fastify = Fastify({
   logger: {
@@ -45,6 +46,66 @@ fastify.get("/health", async () => ({
   renderer: "ffmpeg-optimized",
   version: "3.0.0",
 }));
+
+// SSE Progress endpoint
+fastify.get("/progress/:exportId", async (request, reply) => {
+  const { exportId } = request.params as { exportId: string };
+
+  // Hijack the connection to maintain control
+  reply.hijack();
+
+  // Set SSE headers
+  reply.raw.setHeader("Content-Type", "text/event-stream");
+  reply.raw.setHeader("Cache-Control", "no-cache");
+  reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+
+  // Send initial connection confirmation
+  try {
+    reply.raw.write(`: connected\n\n`);
+  } catch (error) {
+    fastify.log.error({ error, exportId }, "Error writing initial SSE message");
+    return;
+  }
+
+  // Subscribe to progress updates
+  const unsubscribe = subscribe(exportId, (state) => {
+    try {
+      const data = JSON.stringify({
+        progress: state.progress,
+        stage: state.stage,
+        message: state.message,
+      });
+      reply.raw.write(`data: ${data}\n\n`);
+    } catch (error) {
+      // Connection likely closed, stop trying to write
+      fastify.log.warn({ error, exportId }, "Error sending SSE progress update, connection may be closed");
+      unsubscribe();
+    }
+  });
+
+  // Send heartbeat every 30 seconds to keep connection alive
+  const heartbeatInterval = setInterval(() => {
+    try {
+      reply.raw.write(`: heartbeat\n\n`);
+    } catch (error) {
+      // Connection closed, stop heartbeat
+      clearInterval(heartbeatInterval);
+      unsubscribe();
+    }
+  }, 30000);
+
+  // Handle client disconnect
+  request.raw.on("close", () => {
+    clearInterval(heartbeatInterval);
+    unsubscribe();
+    try {
+      reply.raw.end();
+    } catch (error) {
+      // Connection already closed, ignore
+    }
+  });
+});
 
 fastify.post("/render", async (request, reply) => {
   const parts = request.parts();
@@ -98,14 +159,29 @@ fastify.post("/render", async (request, reply) => {
       "Starting optimized render pipeline"
     );
 
+    // Initialize progress
+    setProgress(exportId, 0, "initialization", "Starting render pipeline");
+
     const fps = 30;
 
     // STEP 1: Extract video frames using FFmpeg (FAST!)
     const videoFramesDir = path.join(tempDir, "video-frames");
     await mkdir(videoFramesDir, { recursive: true });
     request.log.info("Extracting video frames with FFmpeg...");
+    setProgress(exportId, 5, "initialization", "Extracting video frames");
 
-    const frameExtractionResult = await extractVideoFrames(videoPath, videoFramesDir, fps);
+    // Progress callback for frame extraction (10-30% range)
+    const onFrameExtractionProgress = (progress: number) => {
+      const mappedProgress = 10 + progress * 0.2; // Map 0-1 to 10-30%
+      setProgress(exportId, mappedProgress, "video processing", "Extracting frames from video");
+    };
+
+    const frameExtractionResult = await extractVideoFrames(
+      videoPath,
+      videoFramesDir,
+      fps,
+      onFrameExtractionProgress
+    );
     request.log.info(
       {
         totalFrames: frameExtractionResult.totalFrames,
@@ -113,29 +189,39 @@ fastify.post("/render", async (request, reply) => {
       },
       "Video frames extracted"
     );
+    setProgress(exportId, 30, "video processing", "Video frames extracted");
 
     // STEP 2: Render caption overlays using Puppeteer (SIMPLE!)
     const overlayDir = path.join(tempDir, "overlays");
     await mkdir(overlayDir, { recursive: true });
     request.log.info("Rendering caption overlays...");
+    setProgress(exportId, 30, "caption rendering", "Rendering caption overlays");
 
     const browser = await createBrowser();
     let browserClosed = false;
 
     try {
+      // Progress callback for overlay rendering (30-70% range)
+      const onOverlayProgress = (progress: number) => {
+        const mappedProgress = 30 + progress * 0.4; // Map 0-1 to 30-70%
+        setProgress(exportId, mappedProgress, "caption rendering", "Rendering caption overlays");
+      };
+
       const overlayResult = await renderCaptionOverlays(
         browser,
         payload,
         frameExtractionResult.totalFrames,
         frameExtractionResult.duration,
         fps,
-        overlayDir
+        overlayDir,
+        onOverlayProgress
       );
 
       request.log.info(
         { totalOverlays: overlayResult.totalFrames },
         "Caption overlays rendered"
       );
+      setProgress(exportId, 70, "caption rendering", "Caption overlays rendered");
 
       // Close browser after rendering overlays
       await browser.close();
@@ -145,6 +231,13 @@ fastify.post("/render", async (request, reply) => {
       // STEP 3: Composite overlays onto video frames using FFmpeg (FAST!)
       const outputPath = path.join(tempDir, `captioned-${exportId}.mp4`);
       request.log.info("Compositing final video with FFmpeg...");
+      setProgress(exportId, 70, "encoding", "Compositing final video");
+
+      // Progress callback for video composition (70-95% range)
+      const onCompositionProgress = (progress: number) => {
+        const mappedProgress = 70 + progress * 0.25; // Map 0-1 to 70-95%
+        setProgress(exportId, mappedProgress, "encoding", "Compositing video frames");
+      };
 
       await composeFinalVideo({
         videoFramesDir,
@@ -153,9 +246,11 @@ fastify.post("/render", async (request, reply) => {
         outputPath,
         fps,
         totalFrames: frameExtractionResult.totalFrames,
+        onProgress: onCompositionProgress,
       });
 
       request.log.info({ outputPath }, "Video composition complete");
+      setProgress(exportId, 95, "finalizing", "Finalizing video");
 
       // Stream the output file
       reply.header("Content-Type", "video/mp4");
@@ -164,6 +259,7 @@ fastify.post("/render", async (request, reply) => {
         `attachment; filename="captioned-${exportId}.mp4"`
       );
 
+      setProgress(exportId, 100, "complete", "Video export complete");
       return reply.send(fs.createReadStream(outputPath));
     } catch (renderError) {
       request.log.error({
@@ -199,6 +295,9 @@ fastify.post("/render", async (request, reply) => {
         errorName: error.name,
       }, "Detailed error info");
     }
+
+    // Update progress to indicate error
+    setProgress(exportId, 100, "error", error instanceof Error ? error.message : "Render failed");
 
     reply.status(500);
     return {
