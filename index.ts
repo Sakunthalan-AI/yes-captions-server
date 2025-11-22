@@ -318,12 +318,15 @@ fastify.post("/transcribe", async (request, reply) => {
   const parts = request.parts();
   const tempDir = await ensureTempDir();
   let videoPath: string | undefined;
+  let language: string | undefined;
 
   try {
     for await (const part of parts) {
       if (part.type === "file" && part.fieldname === "video") {
         const filename = part.filename || "source.mp4";
         videoPath = await persistStream(part.file, path.join(tempDir, filename));
+      } else if (part.type === "field" && part.fieldname === "language") {
+        language = String(part.value);
       }
     }
 
@@ -332,9 +335,23 @@ fastify.post("/transcribe", async (request, reply) => {
       return { error: "Video file is required" };
     }
 
+    // Validate and default language
+    const validLanguageCodes = [
+      'en', 'zh', 'hi', 'es', 'ar', 'fr', 'bn', 'pt', 'id', 'ru', 'ur',
+      'de', 'ja', 'mr', 'vi', 'te', 'ha', 'tr', 'sw', 'tl', 'ta', 'fa',
+      'ko', 'th', 'jv', 'it', 'gu', 'am', 'kn', 'bho', 'pa', 'pcm', 'pl',
+      'uk', 'ro'
+    ];
+    
+    const languageCode = (language && validLanguageCodes.includes(language)) 
+      ? language 
+      : 'en'; // Fallback to English if invalid or missing
+
+    request.log.info({ language: languageCode, originalLanguage: language }, "Transcribing with language");
+
     // Import dynamically to avoid circular deps if any, though not expected here
     const { transcribeVideo } = await import("./src/transcription.js");
-    const result = await transcribeVideo(videoPath, tempDir);
+    const result = await transcribeVideo(videoPath, tempDir, languageCode);
 
     return result;
 

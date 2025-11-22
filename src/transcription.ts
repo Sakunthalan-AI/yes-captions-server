@@ -217,7 +217,7 @@ const normalizeSegments = (
     });
 };
 
-export async function transcribeVideo(videoPath: string, tempDir: string): Promise<TranscriptionResponse> {
+export async function transcribeVideo(videoPath: string, tempDir: string, language: string = 'en'): Promise<TranscriptionResponse> {
     let audioPath: string | null = null;
 
     try {
@@ -274,7 +274,7 @@ export async function transcribeVideo(videoPath: string, tempDir: string): Promi
         groqFormData.append("model", "whisper-large-v3-turbo");
         groqFormData.append("temperature", "0");
         groqFormData.append("response_format", "verbose_json");
-        groqFormData.append("language", "en");
+        groqFormData.append("language", language);
         groqFormData.append("timestamp_granularities[]", "word");
 
         const groqApiKey = "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";
